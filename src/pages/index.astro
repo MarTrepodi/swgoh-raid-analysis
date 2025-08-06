@@ -2,7 +2,8 @@
 import { getCollection } from 'astro:content';
 import Layout from '../components/Layout.astro';
 import StatCard from '../components/StatCard.astro';
-import ChartContainer from '../components/ChartContainer.astro';
+import RaidTotalChart from '../components/RaidTotalChart.astro';
+import RankingChart from '../components/RankingChart.astro';
 import PlayerTable from '../components/PlayerTable.astro';
 import RaidTable from '../components/RaidTable.astro';
 import { PROJECT_CONFIG } from '../config/project.ts';
@@ -29,8 +30,9 @@ function calculatePlayerStats(raidData: RaidData[]): PlayerStats[] {
   // Get the last 5 raids for more recent analysis
   const last5Raids = raidData.slice(-5);
   
+  // Only collect players from last 5 raids (not all raids)
   const allPlayers = new Set();
-  raidData.forEach(raid => {
+  last5Raids.forEach(raid => {
     raid.data.forEach(player => {
       allPlayers.add(player.allycode);
     });
@@ -116,24 +118,27 @@ function calculatePlayerStats(raidData: RaidData[]): PlayerStats[] {
       else trend = 'Stable';
     }
 
-    playerStats.set(allycode, {
-      name: name,
-      allycode: allycode,
-      participation: participationRate,
-      raidsParticipated: participatedRaids,
-      totalRaids: totalRaids,
-      totalScore: totalScore,
-      avgScore: avgScore,
-      avgEstimate: avgEstimate,
-      bestScore: bestScore,
-      maxEstimated: maxEstimated,
-      lastScore: lastScore,
-      efficiency: efficiency,
-      lastActivity: lastActivity,
-      trend: trend,
-      raids: playerRaids, // Keep all raids for detailed table
-      last5Raids: playerLast5Raids // Add last 5 raids data
-    });
+    // Only include players who appeared in at least one of the last 5 raids
+    if (playerLast5Raids.length > 0) {
+      playerStats.set(allycode, {
+        name: name,
+        allycode: allycode,
+        participation: participationRate,
+        raidsParticipated: participatedRaids,
+        totalRaids: totalRaids,
+        totalScore: totalScore,
+        avgScore: avgScore,
+        avgEstimate: avgEstimate,
+        bestScore: bestScore,
+        maxEstimated: maxEstimated,
+        lastScore: lastScore,
+        efficiency: efficiency,
+        lastActivity: lastActivity,
+        trend: trend,
+        raids: playerRaids, // Keep all raids for detailed table
+        last5Raids: playerLast5Raids // Add last 5 raids data
+      });
+    }
   });
   
   return Array.from(playerStats.values());
@@ -172,20 +177,12 @@ const baseUrl = PROJECT_CONFIG.baseUrl;
       </div>
 
       <div class="grid grid-cols-1 gap-6 sm:gap-10 mb-6 sm:mb-8">
-        <ChartContainer 
-          title="📊 Total Raid Points Over Time" 
-          canvasId="raidTotalChart"
-        />
-        
-        <ChartContainer 
-          title="🏆 Performance Points Over Time" 
-          canvasId="rankingChart"
-          description="Player scores per raid • Higher values = better performance"
-        />
+        <RaidTotalChart raidData={allRaidData} />
+        <RankingChart raidData={allRaidData} />
       </div>
 
-      <PlayerTable />
-      <RaidTable />
+      <PlayerTable allPlayerStats={playerStatsArray} />
+      <RaidTable allPlayerStats={playerStatsArray} raidData={allRaidData} />
     </>
   ) : (
     <div class="text-center py-12">
@@ -217,580 +214,12 @@ const baseUrl = PROJECT_CONFIG.baseUrl;
   )}
 
   {totalRaids > 0 && (
-    <script define:vars={{ allRaidData, playerStatsArray, baseUrl }}>
-      let raidData = allRaidData;
-      let allPlayerStats = playerStatsArray;
-    let filteredData = [...allPlayerStats];
-    let isInitialized = false;
-
-    // Helper function to get CSS custom property values
-    function getCSSVariable(variable) {
-      return getComputedStyle(document.documentElement).getPropertyValue(variable).trim();
-    }
-
-    // Get theme colors from CSS variables
-    const themeColors = {
-      primary: getCSSVariable('--color-primary'),
-      secondary: getCSSVariable('--color-secondary'),
-      primaryRgb: getCSSVariable('--color-primary-rgb'),
-      secondaryRgb: getCSSVariable('--color-secondary-rgb'),
-      primaryAlpha: (alpha) => `rgba(${getCSSVariable('--color-primary-rgb')}, ${alpha})`,
-      secondaryAlpha: (alpha) => `rgba(${getCSSVariable('--color-secondary-rgb')}, ${alpha})`
-    };
-
-    function waitForChartJS(callback) {
-      if (typeof Chart !== 'undefined') {
-        callback();
-      } else {
-        console.log('Waiting for Chart.js to load...');
-        setTimeout(() => waitForChartJS(callback), 100);
-      }
-    }
-
-    function initializeApp() {
-      try {
-        if (isInitialized) {
-          console.log('App already initialized, skipping...');
-          return;
-        }
-        
-        console.log('initializeApp called, raidData.length:', raidData.length);
-        
-        console.log('Creating charts and applying initial filters...');
-        
-        // Wait for Chart.js before updating UI
-        waitForChartJS(() => {
-          createCharts();
-          applyFilters();
-          isInitialized = true;
-          console.log('Initialization complete');
-        });
-
-      } catch (error) {
-        console.error('Error in initializeApp:', error);
-        showError(error.message);
-      }
-    }
-
-    function applyFilters() {
-      const sortBy = document.getElementById('sortBy').value;
-
-      // Use all player stats directly (no filtering)
-      filteredData = [...allPlayerStats];
-
-      sortData(sortBy);
-      updateTable();
-    }
-
-    function sortData(criteria) {
-      filteredData.sort((a, b) => {
-        switch (criteria) {
-          case 'name':
-            return a.name.localeCompare(b.name);
-          case 'participation':
-            return b.participation - a.participation;
-          case 'totalScore':
-            return b.totalScore - a.totalScore;
-          case 'avgEstimate':
-            return b.avgEstimate - a.avgEstimate;
-          case 'bestScore':
-            return b.bestScore - a.bestScore;
-          case 'lastScore':
-            return b.lastScore - a.lastScore;
-          case 'efficiency':
-            return b.efficiency - a.efficiency;
-          case 'lastActivity':
-            return new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
-          default:
-            return b.participation - a.participation;
-        }
-      });
-    }
-
-    function updateTable() {
-      const tbody = document.getElementById('playersTableBody');
-      tbody.innerHTML = '';
-
-      filteredData.forEach(player => {
-        const row = document.createElement('tr');
-        
-        let participationClass = '';
-        if (player.participation >= 80) participationClass = 'participation-good';
-        else if (player.participation >= 50) participationClass = 'participation-warning';
-        else participationClass = 'participation-poor';
-
-        let efficiencyClass = '';
-        if (player.efficiency >= 100) efficiencyClass = 'text-green-400';
-        else if (player.efficiency >= 80) efficiencyClass = 'text-yellow-400';
-        else efficiencyClass = 'text-red-400';
-
-        let trendClass = '';
-        if (player.trend === 'Rising') trendClass = 'trend-positive';
-        else if (player.trend === 'Falling') trendClass = 'trend-negative';
-        else if (player.trend === 'Stable') trendClass = 'trend-stable';
-
-        row.innerHTML = `
-          <td>${player.name}</td>
-          <td>${player.allycode}</td>
-          <td class="${participationClass}">${player.participation.toFixed(1)}%</td>
-          <td>${player.raidsParticipated}/${player.totalRaids}</td>
-          <td>${formatNumber(player.avgEstimate)}</td>
-          <td>${formatNumber(player.bestScore)}</td>
-          <td>${formatNumber(player.lastScore)}</td>
-          <td class="${efficiencyClass}">${player.efficiency.toFixed(1)}%</td>
-          <td class="${trendClass}">${player.trend}</td>
-        `;
-        tbody.appendChild(row);
-      });
-    }
-
-function formatNumber(num) {
-      if (num === 0) return '-';
-      return new Intl.NumberFormat(navigator.language).format(Math.round(num));
-    }
-
-    function getPercentageClass(percentage) {
-      if (percentage < 85) return 'percentage-very-low';
-      if (percentage < 95) return 'percentage-low';
-      if (percentage < 105) return 'percentage-below-avg';
-      if (percentage < 110) return 'percentage-avg';
-      if (percentage < 120) return 'percentage-good';
-      if (percentage < 130) return 'percentage-excellent';
-      return 'percentage-outstanding';
-    }
-
-    function sortTable(column) {
-      document.getElementById('sortBy').value = column;
-      applyFilters();
-    }
-
+    <script define:vars={{ baseUrl }}>
     function showError(message) {
       const errorDiv = document.getElementById('error');
       errorDiv.textContent = message;
       errorDiv.classList.remove('hidden');
     }
-
-    document.addEventListener('DOMContentLoaded', initializeApp);
-
-
-    let raidTotalChart = null;
-    let rankingChart = null;
-
-    function createCharts() {
-      // Check if Chart.js is loaded
-      if (typeof Chart === 'undefined') {
-        console.log('Chart.js not loaded yet, retrying in 100ms...');
-        setTimeout(createCharts, 100);
-        return;
-      }
-      
-      createRaidTotalChart();
-      createRankingChart();
-      updateRaidTable();
-    }
-
-    function createRaidTotalChart() {
-      const ctx = document.getElementById('raidTotalChart').getContext('2d');
-      
-      // Destroy existing chart if it exists
-      if (raidTotalChart) {
-        raidTotalChart.destroy();
-      }
-      
-      const sortedRaids = raidData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-      const labels = sortedRaids.map(raid => raid.date);
-      const totalScores = sortedRaids.map(raid => {
-        return raid.data.reduce((sum, player) => sum + (player.lastActualScore || 0), 0);
-      });
-      const participantCounts = sortedRaids.map(raid => {
-        return raid.data.filter(player => player.participated).length;
-      });
-
-      raidTotalChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: labels,
-          datasets: [{
-            label: 'Total Points',
-            data: totalScores,
-            borderColor: themeColors.secondary,
-            backgroundColor: themeColors.secondaryAlpha(0.1),
-            borderWidth: 3,
-            fill: true,
-            tension: 0.4,
-            yAxisID: 'y'
-          }, {
-            label: 'Number of Participants',
-            data: participantCounts,
-            borderColor: themeColors.primary,
-            backgroundColor: themeColors.primaryAlpha(0.1),
-            borderWidth: 2,
-            fill: false,
-            tension: 0.4,
-            yAxisID: 'y1'
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            title: {
-              display: false
-            },
-            legend: {
-              labels: { color: '#e0e0e0' }
-            }
-          },
-          scales: {
-            x: {
-              ticks: { color: '#e0e0e0' },
-              grid: { color: 'rgba(255, 255, 255, 0.1)' }
-            },
-            y: {
-              type: 'linear',
-              display: true,
-              position: 'left',
-              ticks: { 
-                color: themeColors.secondary,
-                callback: function(value) {
-                  return new Intl.NumberFormat(navigator.language).format(value);
-                }
-              },
-              grid: { color: themeColors.secondaryAlpha(0.1) },
-              title: {
-                display: true,
-                text: 'Total Points',
-                color: themeColors.secondary
-              }
-            },
-            y1: {
-              type: 'linear',
-              display: true,
-              position: 'right',
-              ticks: { color: themeColors.primary },
-              grid: { drawOnChartArea: false },
-              title: {
-                display: true,
-                text: 'Number of Participants',
-                color: themeColors.primary
-              }
-            }
-          }
-        }
-      });
-    }
-
-    function createRankingChart() {
-      const ctx = document.getElementById('rankingChart').getContext('2d');
-      
-      // Destroy existing chart if it exists
-      if (rankingChart) {
-        rankingChart.destroy();
-      }
-      
-      rankingChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: raidData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).map(raid => raid.date),
-          datasets: []
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            title: {
-              display: false
-            },
-            legend: {
-              display: false
-            },
-            tooltip: {
-              mode: 'point',
-              intersect: true,
-              callbacks: {
-                title: function(context) {
-                  return context[0].label;
-                },
-                label: function(context) {
-                  return `${context.dataset.label}: ${new Intl.NumberFormat(navigator.language).format(context.parsed.y)} points`;
-                }
-              }
-            }
-          },
-          scales: {
-            x: {
-              ticks: { color: '#e0e0e0' },
-              grid: { color: 'rgba(255, 255, 255, 0.1)' }
-            },
-            y: {
-              ticks: { 
-                color: '#e0e0e0',
-                callback: function(value) {
-                  return new Intl.NumberFormat(navigator.language).format(value);
-                }
-              },
-              grid: { color: 'rgba(255, 255, 255, 0.1)' },
-              title: {
-                display: true,
-                text: 'Points',
-                color: themeColors.primary
-              }
-            }
-          },
-          interaction: {
-            intersect: true,
-            mode: 'point'
-          }
-        }
-      });
-      
-      updateRankingChart();
-    }
-
-    function updateRankingChart() {
-      const sortedRaids = raidData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-      const playerScores = new Map();
-      
-      sortedRaids.forEach(raid => {
-        raid.data.forEach(player => {
-          // Include all players in raid data (participated or not)
-          if (!playerScores.has(player.allycode)) {
-            playerScores.set(player.allycode, {
-              name: player.name,
-              scores: []
-            });
-          }
-          // Add score (0 if didn't participate, actual score if participated)
-          playerScores.get(player.allycode).scores.push({
-            date: raid.date,
-            score: player.participated ? (player.lastActualScore || 0) : 0
-          });
-        });
-      });
-      
-      const colors = [
-        themeColors.secondary, '#C0C0C0', '#CD7F32', themeColors.secondary, themeColors.primary, 
-        '#FF9800', '#9C27B0', '#F44336', '#00BCD4', themeColors.primary,
-        '#FF5722', '#607D8B', '#E91E63', '#3F51B5', '#009688'
-      ];
-      
-      rankingChart.data.datasets = [];
-      let colorIndex = 0;
-      
-      const minAppearances = Math.ceil(sortedRaids.length / 2);
-      
-      Array.from(playerScores.entries())
-        .filter(([allycode, data]) => data.scores.length >= minAppearances)
-        .sort((a, b) => {
-          const avgA = a[1].scores.reduce((sum, r) => sum + r.score, 0) / a[1].scores.length;
-          const avgB = b[1].scores.reduce((sum, r) => sum + r.score, 0) / b[1].scores.length;
-          return avgB - avgA;
-        })
-        .forEach(([allycode, data]) => {
-          const fullScores = sortedRaids.map(raid => {
-            const scoreEntry = data.scores.find(r => r.date === raid.date);
-            return scoreEntry ? scoreEntry.score : null;
-          });
-          
-          rankingChart.data.datasets.push({
-            label: data.name,
-            data: fullScores,
-            borderColor: colors[colorIndex % colors.length],
-            backgroundColor: colors[colorIndex % colors.length] + '20',
-            borderWidth: 2,
-            fill: false,
-            tension: 0.3,
-            spanGaps: false,
-            pointRadius: 4,
-            pointHoverRadius: 6
-          });
-          colorIndex++;
-        });
-      
-      rankingChart.update();
-    }
-
-    function updateRaidTable() {
-      const sortBy = document.getElementById('raidTableSort').value;
-      const raidTableBody = document.getElementById('raidTableBody');
-      
-      // Use only the last 5 raids for the detailed table
-      const last5RaidData = raidData.slice(-5);
-      const last5RaidDates = last5RaidData.map(raid => raid.date).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
-      
-      // Convert player stats to format needed for raid table, using last5Raids data
-      const allPlayersData = allPlayerStats.map(playerStat => {
-        const playerData = {
-          name: playerStat.name,
-          participation: playerStat.participation,
-          avgScore: playerStat.avgScore,
-          avgEstimate: playerStat.avgEstimate,
-          maxEstimated: playerStat.maxEstimated,
-          bestScore: playerStat.bestScore,
-          efficiency: playerStat.efficiency,
-          raids: {}
-        };
-        
-        // Map last 5 raids data - only add entries where player was in guild
-        const raidsMap = {};
-        playerStat.last5Raids.forEach(raidEntry => {
-          raidsMap[raidEntry.date] = raidEntry.participated ? raidEntry.score : null;
-        });
-        
-        // For dates where player has no entry, set to undefined (not in guild)
-        last5RaidDates.forEach(raidDate => {
-          if (!(raidDate in raidsMap)) {
-            raidsMap[raidDate] = undefined;
-          }
-        });
-        
-        playerData.raids = raidsMap;
-        
-        return playerData;
-      });
-      
-      // Sort all players data directly (no filtering)
-      allPlayersData.sort((a, b) => {
-        switch (sortBy) {
-          case 'name':
-            return a.name.localeCompare(b.name);
-          case 'avgEstimate':
-            return b.avgEstimate - a.avgEstimate;
-          default:
-            return 0;
-        }
-      });
-      
-      let html = '';
-      
-      // Calculate averages for last 5 raids only (only from players who have data for that raid)
-      const raidAverages = {};
-      for (let raidDate of last5RaidDates) {
-        let totalScore = 0;
-        let playerCount = 0;
-        
-        for (let player of allPlayersData) {
-          const score = player.raids[raidDate];
-          if (score !== undefined && score !== null) {
-            totalScore += score;
-            playerCount++;
-          }
-        }
-        
-        raidAverages[raidDate] = playerCount > 0 ? totalScore / playerCount : 0;
-      }
-      
-      for (let player of allPlayersData) {
-        html += `<tr>`;
-        html += `<td class="table-cell-sticky">${player.name}</td>`;
-        html += `<td class="table-cell-center">${new Intl.NumberFormat(navigator.language).format(Math.round(player.avgEstimate))}</td>`;
-        
-        // Add individual raid scores for last 5 raids
-        for (let raidDate of last5RaidDates) {
-          const score = player.raids[raidDate];
-          const avgScore = raidAverages[raidDate];
-          
-          if (score === undefined) {
-            // Player was not in guild at this time - show gray
-            html += `<td class="table-cell-center text-gray-500">-</td>`;
-          } else if (score === null) {
-            // Player was in guild but didn't participate - show red
-            html += `<td class="table-cell-center percentage-very-low">-</td>`;
-          } else {
-            // Player participated - show with color coding
-            const percentageVsAvg = avgScore > 0 ? (score / avgScore) * 100 : 100;
-            const percentageClass = getPercentageClass(percentageVsAvg);
-            
-            const playerStat = allPlayerStats.find(p => p.name === player.name);
-            const raidEntry = playerStat?.last5Raids.find(r => r.date === raidDate);
-            const estimatedScore = raidEntry?.estimatedScore || 0;
-            const raidEfficiency = estimatedScore > 0 ? ((score / estimatedScore) * 100) : 0;
-            
-            html += `<td class="table-cell-center ${percentageClass}">${new Intl.NumberFormat(navigator.language).format(score)} (${raidEfficiency.toFixed(0)}%)</td>`;
-          }
-        }
-        
-        // Add Max/Est as the very last column (Best Score as percentage of Average Estimate)
-        const maxEstPercentage = player.avgEstimate > 0 ? ((player.bestScore / player.avgEstimate) * 100) : 0;
-        const percentageClass = getPercentageClass(maxEstPercentage);
-        html += `<td class="table-cell-center ${percentageClass}">${maxEstPercentage.toFixed(0)}%</td>`;
-        
-        html += `</tr>`;
-      }
-      
-      // Calculate totals for footer
-      const totalAvgEstimate = allPlayersData.length > 0 ? 
-        (allPlayersData.reduce((sum, p) => sum + p.avgEstimate, 0) / allPlayersData.length) : 0;
-      
-      // Calculate total scores for each raid (only players who have data for that raid)
-      const raidTotals = {};
-      for (let raidDate of last5RaidDates) {
-        let total = 0;
-        for (let player of allPlayersData) {
-          const score = player.raids[raidDate];
-          if (score !== undefined && score !== null) {
-            total += score;
-          }
-        }
-        raidTotals[raidDate] = total;
-      }
-      
-      // Calculate average Max/Est percentage
-      const avgMaxEstPercentage = allPlayersData.length > 0 ? 
-        (allPlayersData.reduce((sum, p) => {
-          const percentage = p.avgEstimate > 0 ? ((p.bestScore / p.avgEstimate) * 100) : 0;
-          return sum + percentage;
-        }, 0) / allPlayersData.length) : 0;
-      
-      // Add footer row with totals
-      html += `<tr class="table-footer">`;
-      html += `<td class="table-cell-sticky">📊 TOTAL (${allPlayersData.length} players)</td>`;
-      html += `<td>${new Intl.NumberFormat(navigator.language).format(Math.round(totalAvgEstimate))}</td>`;
-      
-      // Add total scores for each raid
-      for (let raidDate of last5RaidDates) {
-        html += `<td>${new Intl.NumberFormat(navigator.language).format(raidTotals[raidDate])}</td>`;
-      }
-      
-      // Add average Max/Est percentage
-      const avgPercentageClass = getPercentageClass(avgMaxEstPercentage);
-      html += `<td class="${avgPercentageClass}">${avgMaxEstPercentage.toFixed(0)}%</td>`;
-      html += `</tr>`;
-      
-      raidTableBody.innerHTML = html;
-      
-      // Update table headers to show only last 5 raids
-      const tableHeader = document.querySelector('#raidTable thead tr');
-      const existingRaidHeaders = tableHeader.querySelectorAll('th[data-raid-date]');
-      const existingMaxEstHeader = tableHeader.querySelector('th[data-max-est]');
-      
-      // Remove existing raid date headers and max/est header
-      existingRaidHeaders.forEach(th => th.remove());
-      if (existingMaxEstHeader) {
-        existingMaxEstHeader.remove();
-      }
-      
-      // Add new headers for last 5 raids
-      for (let raidDate of last5RaidDates) {
-        const th = document.createElement('th');
-        th.setAttribute('data-raid-date', raidDate);
-        th.className = 'table-header px-2 sm:px-3 py-2 sm:py-3 text-center min-w-[100px]';
-        th.innerHTML = `${raidDate}<br><small class="text-gray-400">(Ø ${new Intl.NumberFormat(navigator.language).format(Math.round(raidAverages[raidDate]))})</small>`;
-        tableHeader.appendChild(th);
-      }
-      
-      // Add Max/Est header as the very last column
-      const maxEstTh = document.createElement('th');
-      maxEstTh.setAttribute('data-max-est', 'true');
-      maxEstTh.className = 'table-header px-2 sm:px-3 py-2 sm:py-3 text-center min-w-[120px]';
-      maxEstTh.innerHTML = 'Max/Est';
-      tableHeader.appendChild(maxEstTh);
-    }
-
-    window.applyFilters = applyFilters;
-    window.sortTable = sortTable;
-    window.updateRankingChart = updateRankingChart;
-    window.updateRaidTable = updateRaidTable;
     </script>
   )}
 </Layout>
