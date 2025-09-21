@@ -1,4 +1,6 @@
 ---
+import { PROJECT_CONFIG } from '../config/project.ts';
+
 // This component renders the detailed raid results table
 export interface Props {
   allPlayerStats: any[];
@@ -6,6 +8,9 @@ export interface Props {
 }
 
 const { allPlayerStats, raidData } = Astro.props;
+
+// Calculate base URL for navigation
+const baseUrl = PROJECT_CONFIG.baseUrl.endsWith('/') ? PROJECT_CONFIG.baseUrl.slice(0, -1) : PROJECT_CONFIG.baseUrl;
 
 // Helper function to get percentage class (matches the JavaScript version)
 function getPercentageClass(percentage: number): string {
@@ -86,11 +91,13 @@ for (let raidDate of last5RaidDates) {
 // Calculate average Avg/Est percentage
 const avgAvgEstPercentage = allPlayersData.length > 0 ? 
   (allPlayersData.reduce((sum: number, p: any) => {
-    const participatedScores = last5RaidDates
+    // Include all raids where player was in guild (not undefined), count non-participation as 0
+    const guildRaidScores = last5RaidDates
       .map(raidDate => p.raids[raidDate])
-      .filter(score => score !== null && score !== undefined);
-    const avgRaidScore = participatedScores.length > 0 ? 
-      participatedScores.reduce((sum, score) => sum + score, 0) / participatedScores.length : 0;
+      .filter(score => score !== undefined)
+      .map(score => score === null ? 0 : score); // null means didn't participate but was in guild
+    const avgRaidScore = guildRaidScores.length > 0 ? 
+      guildRaidScores.reduce((sum, score) => sum + score, 0) / guildRaidScores.length : 0;
     const percentage = p.avgEstimate > 0 ? ((avgRaidScore / p.avgEstimate) * 100) : 0;
     return sum + percentage;
   }, 0) / allPlayersData.length) : 0;
@@ -111,8 +118,20 @@ const formatDate = (dateStr: string) => {
 const sortedPlayersData = [...allPlayersData].sort((a: any, b: any) => a.name.localeCompare(b.name));
 ---
 
-<div class="glass-card p-3 sm:p-5 mt-6 sm:mt-8">
+<div class="glass-card p-3 sm:p-5 mb-6">
   <h2 class="text-heading mb-3 sm:mb-5 text-center text-sm sm:text-xl">📊 Detailed Raid Results (Last 5 Raids)</h2>
+  
+  <!-- Filter Controls -->
+  <div class="mb-4 flex justify-center">
+    <label class="flex items-center gap-2 cursor-pointer">
+      <input type="checkbox" id="hideIncompleteRaidPlayersFilter" class="sr-only">
+      <div class="switch">
+        <div class="switch-slider"></div>
+      </div>
+      <span class="text-gray-300 text-sm">Hide players not in all last 5 raids</span>
+    </label>
+  </div>
+  
   <div class="mobile-scroll-hint">👈 Swipe to see all raid dates</div>
   <div class="overflow-x-auto">
     <table id="raidTable" class="w-full border-collapse text-xs sm:text-sm">
@@ -146,16 +165,30 @@ const sortedPlayersData = [...allPlayersData].sort((a: any, b: any) => a.name.lo
           const maxEstPercentage = player.avgEstimate > 0 ? ((player.bestScore / player.avgEstimate) * 100) : 0;
           
           // Calculate Avg/Avg Est percentage
-          const participatedScores = last5RaidDates
+          // Include all raids where player was in guild (not undefined), count non-participation as 0
+          const guildRaidScores = last5RaidDates
             .map(raidDate => player.raids[raidDate])
-            .filter(score => score !== null && score !== undefined);
-          const avgRaidScore = participatedScores.length > 0 ? 
-            participatedScores.reduce((sum, score) => sum + score, 0) / participatedScores.length : 0;
+            .filter(score => score !== undefined)
+            .map(score => score === null ? 0 : score); // null means didn't participate but was in guild
+          const avgRaidScore = guildRaidScores.length > 0 ? 
+            guildRaidScores.reduce((sum, score) => sum + score, 0) / guildRaidScores.length : 0;
           const avgEstPercentage = player.avgEstimate > 0 ? ((avgRaidScore / player.avgEstimate) * 100) : 0;
           
+          // Get player allycode from playerStats
+          const playerStat = allPlayerStats.find((p: any) => p.name === player.name);
+          const allycode = playerStat?.allycode || '';
+          
           return (
-            <tr class="raid-table-row" data-name={player.name} data-avgestimate={player.avgEstimate} data-avgest={avgEstPercentage} data-maxest={maxEstPercentage}>
-              <td class="raid-table-cell raid-table-cell-sticky">{player.name}</td>
+            <tr class="raid-table-row" tabindex="0" data-name={player.name} data-avgestimate={player.avgEstimate} data-avgest={avgEstPercentage} data-maxest={maxEstPercentage}>
+              <td class="raid-table-cell raid-table-cell-sticky">
+                {allycode ? (
+                  <a href={`${baseUrl}/player/${allycode}`} class="text-cyan-400 hover:text-cyan-300 underline underline-offset-2 transition-colors">
+                    {player.name}
+                  </a>
+                ) : (
+                  player.name
+                )}
+              </td>
               <td class="raid-table-cell raid-table-cell-center">{new Intl.NumberFormat('de-DE').format(Math.round(player.avgEstimate))}</td>
               {last5RaidDates.map((raidDate: string) => {
                 const score = player.raids[raidDate];
@@ -246,8 +279,57 @@ const sortedPlayersData = [...allPlayersData].sort((a: any, b: any) => a.name.lo
     ? JSON.parse(savedRaidSort) 
     : { column: 'name', direction: 'asc' };
 
+  // Load saved filter state from localStorage
+  const savedRaidFilter = localStorage.getItem('raidTableHideIncomplete');
+  let hideIncompleteRaidFilter = savedRaidFilter === 'true';
+
   function saveRaidSortState() {
     localStorage.setItem('raidTableSort', JSON.stringify(currentRaidSort));
+  }
+
+  function saveRaidFilterState() {
+    localStorage.setItem('raidTableHideIncomplete', hideIncompleteRaidFilter.toString());
+  }
+
+  function applyRaidFilter() {
+    const tbody = document.getElementById('raidTableBody');
+    if (!tbody) return;
+    
+    const rows = tbody.querySelectorAll('tr:not(.raid-table-footer)');
+    
+    rows.forEach(row => {
+      if (hideIncompleteRaidFilter) {
+        // Check if player has data for all raids (no undefined entries)
+        const cells = row.querySelectorAll('td[data-raid-date]');
+        let hasAllRaids = true;
+        
+        cells.forEach(cell => {
+          // If cell contains "-" and has gray color, it means player wasn't in guild
+          if (cell.textContent && cell.textContent.trim() === '-' && cell.classList.contains('text-gray-500')) {
+            hasAllRaids = false;
+          }
+        });
+        
+        if (hasAllRaids) {
+          row.classList.remove('hidden');
+        } else {
+          row.classList.add('hidden');
+        }
+      } else {
+        row.classList.remove('hidden');
+      }
+    });
+    
+    // Fix borders: Remove border from last visible row
+    const visibleRows = Array.from(rows).filter(row => !row.classList.contains('hidden'));
+    
+    // Remove 'last-visible' class from all rows first
+    rows.forEach(row => row.classList.remove('last-visible'));
+    
+    // Add 'last-visible' class to the actual last visible row
+    if (visibleRows.length > 0) {
+      visibleRows[visibleRows.length - 1].classList.add('last-visible');
+    }
   }
 
   function updateRaidSortIndicators() {
@@ -350,8 +432,27 @@ const sortedPlayersData = [...allPlayersData].sort((a: any, b: any) => a.name.lo
   applySortRaidTableWithoutToggle();
   updateRaidSortIndicators();
   
-  // Initialize indicators on page load
+  // Initialize filter and indicators on page load
   document.addEventListener('DOMContentLoaded', function() {
+    // Set initial filter state
+    const filterCheckbox = document.querySelector('#hideIncompleteRaidPlayersFilter') as HTMLInputElement;
+    if (filterCheckbox && filterCheckbox.type === 'checkbox') {
+      filterCheckbox.checked = hideIncompleteRaidFilter;
+      
+      // Add event listener for filter changes
+      filterCheckbox.addEventListener('change', function() {
+        const checkbox = document.querySelector('#hideIncompleteRaidPlayersFilter') as HTMLInputElement;
+        if (checkbox && checkbox.type === 'checkbox') {
+          hideIncompleteRaidFilter = checkbox.checked;
+          saveRaidFilterState();
+          applyRaidFilter();
+        }
+      });
+    }
+    
+    // Apply initial filter
+    applyRaidFilter();
+    
     applySortRaidTableWithoutToggle();
     updateRaidSortIndicators();
   });
